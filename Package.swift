@@ -1,7 +1,7 @@
 import PackageDescription
 
 let package = Package(
-  name:"SWJSON"
+  name:"SWJSON",
   dependencies : [.Package(url:"https://github.com/matthewlui/SWStringExtension.git",majorVersion:1)]
-  
+
 )

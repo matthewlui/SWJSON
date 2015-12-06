@@ -1,36 +1,39 @@
 
 import SWStringExtension
 
+typealias SWJSONDict = [SWJSON:SWJSON]
+typealias SWJSONArray = [SWJSON]
+
 enum xJSONParsingError:ErrorType {
     case ParsingFail(reason:String,areaRange:Range<String.Index>)
 }
 
 class SWJSONCore {
-    private var rawValue    :String
+    private var rawString    :String
     init (str:String){
-        self.rawValue = str
+        self.rawString = str
     }
     subscript (range:Range<String.Index>) -> String?{
         get{
-            if range.endIndex < rawValue.endIndex{
-                return rawValue[range]
+            if range.endIndex < rawString.endIndex{
+                return rawString[range]
             }
             return nil
         }
     }
 }
 
-class SWJSON{
+public class SWJSON{
 
     private var range : Range<String.Index>
 
-    private var json  : SWTJSONCore
+    private var json  : SWJSONCore
 
     enum JSONValue{
         case StringValue
         case NumberValue
-        case DictionaryValue([SWTJSON:SWTJSON])
-        case ArrayValue([SWTJSON])
+        case DictionaryValue(SWJSONDict)
+        case ArrayValue(SWJSONArray)
         case BoolenValue
         case Null
         case Undefined
@@ -38,77 +41,236 @@ class SWJSON{
 
     lazy var value    : JSONValue = {
         .Undefined
-        }()
+    }()
 
-    lazy var stringValue  : String?
+    lazy var stringValue    : String?
     = {
         if case .StringValue = self.value{
-            return self.json.rawValue[self.range]
+            return self.json.rawString[self.range]
         }
         return nil
-      }()
+    }()
 
-    lazy var dictionaryValue  : [SWTJSON:SWTJSON]?
+    lazy var dictionaryValue: SWJSONDict?
     = {
         if case let .DictionaryValue ( dict ) = self.value{
             return dict
         }
         return nil
-      }()
+    }()
 
-    lazy var arrayValue     : [SWTJSON]?
+    lazy var arrayValue     : SWJSONArray?
     = {
         if case let .ArrayValue ( array ) = self.value{
             return array
         }
         return nil
-      }()
+    }()
 
-    lazy var boolenValue    : Bool?     = {
+    lazy var boolenValue    : Bool?
+    = {
         if case .BoolenValue = self.value{
             return self.range.startIndex.distanceTo(self.range.endIndex) == 4
         }
         return false
-        }()
+    }()
 
-    lazy var intValue       : Int?      = {
+    lazy var intValue       : Int?
+    = {
         if case .NumberValue = self.value {
-            return Int(self.json.rawValue[self.range])
+            return Int(self.json.rawString[self.range])
         }
         return nil
-        }()
+    }()
 
-    lazy var doubleValue    : Double?   = {
+    lazy var doubleValue    : Double?
+    = {
         if case .NumberValue = self.value {
-            return Double(self.json.rawValue[self.range])
+            let s = self.json.rawString[self.range]
+            let d = Double(s)
+            return Double(self.json.rawString[self.range])
         }
         return nil
-        }()
+    }()
 
     init (str:String) {
-        self.json = SWJSONCore(str: str.trimHeadAndTailSapce())
+        self.json  = SWJSONCore(str: str.trimHeadAndTailSapce())
         self.range = str.startIndex...str.endIndex.predecessor()
     }
 
-    init (json:SWTJSON,range:Range<String.Index>,value:JSONValue){
-        self.json = json.json
+    init (json:SWJSON,range:Range<String.Index>,value:JSONValue){
+        self.json  = json.json
         self.range = range
         self.value = value
     }
 
-    func forward(){
-        range = range.startIndex.advancedBy(1)...range.endIndex.advancedBy(1)
-    }
+}
 
+extension SWJSON {
+    static func parseJSONString(str:String) throws ->  SWJSON? {
+        var stringToParse       = str //.trimHeadAndTailSapce()
+        var json                = SWJSON(str: stringToParse)
+        func parse(from:String.Index,stringToParse:String) throws ->  SWJSON?{
+            var workingRange        = from...from
+            var startSymblo         = stringToParse[from]
+            var cache               = [SWJSON]()
+            while workingRange.endIndex < stringToParse.endIndex{
+
+                switch (startSymblo,stringToParse[workingRange.endIndex]) {
+                case ("{", let currentChar ):
+                    if currentChar.containedInString(" \n"){
+                        workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex).predecessor()
+                        break
+                    }else if currentChar.containedInString(":,"){
+                        workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex.successor()).predecessor()
+                    }
+                    if currentChar == "}"{
+                        var dict = [SWJSON:SWJSON]()
+                        while let first = cache.first {
+                            cache.removeFirst()
+                            guard let second = cache.first else{
+                                return SWJSON(json: json, range: workingRange, value: .DictionaryValue(dict))
+                            }
+                            dict[first] = second
+                            cache.removeFirst()
+                        }
+                        workingRange.expand()
+                        return SWJSON(json: json, range: workingRange, value: .DictionaryValue(dict))
+                    }
+                    do{
+                        guard let jObject = try parse(workingRange.endIndex, stringToParse: stringToParse) else {
+                            return nil
+                        }
+                        workingRange.endIndex = jObject.range.endIndex
+                        cache.append(jObject)
+                        stringToParse[workingRange.endIndex]
+                    }catch let err{
+                        throw err
+                    }
+                    break
+
+                case ("[",let currentChar):
+                    if currentChar.containedInString(" \n"){
+                        workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex).predecessor()
+                        break
+                    }else if currentChar == ","{
+                        workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex.successor()).predecessor()
+                    }
+                    if currentChar == "]"{
+                        workingRange.expand()
+                        return SWJSON(json: json, range: workingRange, value: .ArrayValue(cache))
+                    }
+                    do {
+                        guard let jObject = try parse(workingRange.endIndex, stringToParse: stringToParse) else{
+                            return nil
+                        }
+                        workingRange.endIndex = jObject.range.endIndex
+                        cache.append(jObject)
+                    }catch let err{
+                        throw err
+                    }
+                    break
+
+                case ("\"", let currentChar):
+                    workingRange.expand()
+                    if currentChar == "\\"{
+                        // Skip next char
+                        workingRange.expand()
+                        break
+                    }
+                    if currentChar == "\""{
+                        // packing back cache and return
+                        return SWJSON(json: json, range: workingRange, value: .StringValue)
+                    }
+
+                case let ( beginChar , b ) where beginChar.containedInString("+-.0123456789") :
+                    //MARK: move backward if test fail
+
+                    if b.containedInString(",}] "){
+                        let j = SWJSON(json: json, range: workingRange, value: .NumberValue)
+                        workingRange.expand()
+                        return j
+
+                    }
+                    workingRange.expand()
+                    break
+
+                case let ( beginChar, _ ) where beginChar.containedInString("nN") :
+                    let assumingRange = workingRange.startIndex...workingRange.startIndex.advancedBy(3)
+                    return SWJSON(json: json, range: assumingRange, value: .Null)
+
+                case let ( beginChar, _ ) where beginChar.containedInString("tT") :
+                    let assumingRange = workingRange.startIndex...workingRange.startIndex.advancedBy(3)
+                    return SWJSON(json: json, range: assumingRange, value: .BoolenValue)
+
+                case let ( beginChar, _ ) where beginChar.containedInString("fF"):
+                    let assumingRange = workingRange.startIndex...workingRange.startIndex.advancedBy(4)
+                    return SWJSON(json: json, range: assumingRange, value: .BoolenValue)
+
+                case let ( beginChar, _ ) where beginChar.containedInString(" \n"):
+                    let nextNoneEmpty = stringToParse.nextNoneEmptyIndex(workingRange.startIndex)
+                    if nextNoneEmpty < workingRange.endIndex{
+                        workingRange = nextNoneEmpty...workingRange.endIndex.predecessor()
+                        startSymblo = stringToParse[workingRange.startIndex]
+                    }else{
+                        workingRange = nextNoneEmpty...nextNoneEmpty
+                    }
+
+                    break
+
+                default:
+                    if workingRange.startIndex.successor() < workingRange.endIndex.predecessor(){
+                        workingRange = workingRange.startIndex.successor()...workingRange.endIndex.predecessor()
+                        break
+                    }
+                    throw xJSONParsingError.ParsingFail(reason: "Undefined : (\(stringToParse[workingRange])) \n", areaRange: workingRange)
+                }
+            }
+            return nil
+        }
+        do {
+            return try parse(stringToParse.startIndex, stringToParse: stringToParse)
+        }catch let err{
+            throw err
+        }
+    }
+}
+
+extension SWJSON {
+    subscript (key:String) -> AnyObject? {
+        get {
+            if let dict = dictionaryValue,
+                let value = dict[SWJSON(str: key)]{
+                    switch value.value {
+                    case .NumberValue:
+                        return value.doubleValue
+                    case .StringValue:
+                        return value.stringValue
+                    case .ArrayValue(let array):
+                        return array
+                    case .DictionaryValue(let dict):
+                        return dict
+                    case .BoolenValue:
+                        return value.boolenValue
+                    case .Undefined:
+                        return "Undefined"
+                    case .Null:
+                        return nil
+                    }
+                return value
+            }
+            return nil
+        }
+    }
 }
 
 extension SWJSON : Hashable {
-    var hashValue : Int {
-        return json.rawValue[range].unwrapSymblo(("\"","\"")).hashValue
+    public var hashValue : Int {
+        return json.rawString[range].unwrapSymblo(("\"","\"")).hashValue
     }
 }
 
-func == (lhs:SWTJSON,rhs:SWTJSON) -> Bool {
+public func == (lhs:SWJSON,rhs:SWJSON) -> Bool {
     return lhs.hashValue == rhs.hashValue
 }
 
@@ -122,11 +284,12 @@ struct JSONBlockIdentifier {
     static let null         = "null"
 }
 
-extension SWTJSON:CustomDebugStringConvertible{
-    var debugDescription:String {
+extension SWJSON:CustomDebugStringConvertible{
+
+    public var debugDescription:String {
         switch self.value{
         case .StringValue:
-            return "String:" + json.rawValue[range] + "\n"
+            return "String:" + json.rawString[range] + "\n"
         case .DictionaryValue(let dict):
             var str = "Dictionary:\n"
             if dict.isEmpty {
@@ -148,7 +311,7 @@ extension SWTJSON:CustomDebugStringConvertible{
             }
             return str + "}"
         case .NumberValue:
-            return "Number:" + json.rawValue[range] + "\n"
+            return "Number:" + json.rawString[range] + "\n"
         case .ArrayValue(let array):
             var str = "Array:\n [ "
             //TODO: decription may limit to first & last 10?
@@ -171,138 +334,12 @@ extension SWTJSON:CustomDebugStringConvertible{
             }
             return str + "]"
         case .Null:
-            return "Null:" + json.rawValue[range] + "\n"
+            return "Null:" + json.rawString[range] + "\n"
         case .BoolenValue:
-            return "Boolen:" + json.rawValue[range] + "\n"
+            return "Boolen:" + json.rawString[range] + "\n"
         default:
             return "Undefined"
         }
-    }
-
-    static func parse(str:String) throws ->  SWTJSON? {
-        var parsingString       = str //.trimHeadAndTailSapce()
-        var json                = SWTJSON(str: parsingString)
-
-        do {
-            return try parse(parsingString.startIndex, stringToParse: parsingString)
-        }catch let err{
-            throw err
-        }
-    }
-
-    static func parse(from:String.Index,stringToParse:String) throws ->  SWTJSON?{
-        var workingRange        = from...from
-        var firstSymblo         = stringToParse[from]
-        var cache               = [SWTJSON]()
-        while workingRange.endIndex < stringToParse.endIndex{
-
-            switch (firstSymblo,stringToParse[workingRange.endIndex]) {
-            case ("{", let currentChar ):
-                if currentChar.containedInString(" \n"){
-                    workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex).predecessor()
-                    break
-                }else if currentChar.containedInString(":,"){
-                    workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex.successor()).predecessor()
-                }
-                if currentChar == "}"{
-                    var dict = [SWTJSON:SWTJSON]()
-                    while let first = cache.first {
-                        cache.removeFirst()
-                        guard let second = cache.first else{
-                            return SWTJSON(json: json, range: workingRange, value: .DictionaryValue(dict))
-                        }
-                        dict[first] = second
-                        cache.removeFirst()
-                    }
-                    workingRange.expand()
-                    return SWTJSON(json: json, range: workingRange, value: .DictionaryValue(dict))
-                }
-                do{
-                    guard let jObject = try parse(workingRange.endIndex, stringToParse: stringToParse) else {
-                        return nil
-                    }
-                    workingRange.endIndex = jObject.range.endIndex
-                    cache.append(jObject)
-                    parsingString[workingRange.endIndex]
-                }catch let err{
-                    throw err
-                }
-                break
-
-            case ("[",let currentChar):
-                if currentChar.containedInString(" \n"){
-                    workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex).predecessor()
-                    break
-                }else if currentChar == ","{
-                    workingRange = workingRange.startIndex...stringToParse.nextNoneEmptyIndex(workingRange.endIndex.successor()).predecessor()
-                }
-                if currentChar == "]"{
-                    workingRange.expand()
-                    return SWTJSON(json: json, range: workingRange, value: .ArrayValue(cache))
-                }
-                do {
-                    guard let jObject = try parse(workingRange.endIndex, stringToParse: stringToParse) else{
-                        return nil
-                    }
-                    workingRange.endIndex = jObject.range.endIndex
-                    cache.append(jObject)
-                }catch let err{
-                    throw err
-                }
-                break
-
-            case ("\"", let currentChar):
-                workingRange.expand()
-                if currentChar == "\\"{
-                    // Skip next char
-                    workingRange.expand()
-                    break
-                }
-                if currentChar == "\""{
-                    // packing back cache and return
-                    return SWTJSON(json: json, range: workingRange, value: .StringValue)
-                }
-
-            case let ( beginChar , b ) where beginChar.containedInString("+-.0123456789") :
-                //MARK: move backward if test fail
-                workingRange.expand()
-                if b.containedInString(",}] "){
-                    return SWTJSON(json: json, range: workingRange, value: .NumberValue)
-                }
-                break
-
-            case let ( beginChar, _ ) where beginChar.containedInString("nN") :
-                let assumingRange = workingRange.startIndex...workingRange.startIndex.advancedBy(3)
-                return SWTJSON(json: json, range: assumingRange, value: .Null)
-
-            case let ( beginChar, _ ) where beginChar.containedInString("tT") :
-                let assumingRange = workingRange.startIndex...workingRange.startIndex.advancedBy(3)
-                return SWTJSON(json: json, range: assumingRange, value: .BoolenValue)
-
-            case let ( beginChar, _ ) where beginChar.containedInString("fF"):
-                let assumingRange = workingRange.startIndex...workingRange.startIndex.advancedBy(4)
-                return SWTJSON(json: json, range: assumingRange, value: .BoolenValue)
-
-            case let ( beginChar, _ ) where beginChar.containedInString(" \n"):
-                let nextNoneEmpty = stringToParse.nextNoneEmptyIndex(workingRange.startIndex)
-                if nextNoneEmpty < workingRange.endIndex{
-                    workingRange = nextNoneEmpty...workingRange.endIndex.predecessor()
-                    firstSymblo = stringToParse[workingRange.startIndex]
-                }else{
-                    workingRange = nextNoneEmpty...nextNoneEmpty
-                }
-
-                break
-
-            default:
-                if workingRange.startIndex.successor() < workingRange.endIndex.predecessor(){
-                    workingRange = workingRange.startIndex.successor()...workingRange.endIndex.predecessor()
-                    break
-                }
-                throw xJSONParsingError.ParsingFail(reason: "Undefined : (\(stringToParse[workingRange])) \n", areaRange: workingRange)
-            }
-        }
-        return nil
     }
 
 }
